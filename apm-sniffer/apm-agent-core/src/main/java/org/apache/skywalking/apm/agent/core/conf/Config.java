@@ -67,6 +67,12 @@ public class Config {
         public static String IGNORE_SUFFIX = ".jpg,.jpeg,.js,.css,.png,.bmp,.gif,.ico,.mp3,.mp4,.html,.svg";
 
         /**
+         * todo
+         * @see org.apache.skywalking.apm.agent.core.logging.core.PatternLogger#DEFAULT_CONVERTER_MAP
+         */
+        public static String TRACE_IGNORE_CONFIG = "";
+
+        /**
          * The max number of TraceSegmentRef in a single span to keep memory cost estimatable.
          */
         public static int TRACE_SEGMENT_REF_LIMIT_PER_SPAN = 500;

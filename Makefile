@@ -23,7 +23,7 @@ AGENT_PACKAGE ?= skywalking-agent
 
 .PHONY: build
 build:
-	./mvnw --batch-mode clean package -Dmaven.test.skip=true
+	./mvnw --batch-mode clean package -Dmaven.test.skip=true -Dcheckstyle.skip -Dos.detected.classifier=osx-x86_64
 
 .PHONY: dist
 dist: build
