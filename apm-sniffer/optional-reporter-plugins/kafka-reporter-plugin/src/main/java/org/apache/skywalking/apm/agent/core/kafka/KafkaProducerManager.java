@@ -67,6 +67,10 @@ public class KafkaProducerManager implements BootService, Runnable {
 
     private ScheduledFuture<?> bootProducerFuture;
 
+    private String bootstrapServers;
+    private Map<String, String> producerConfig;
+    public String producerConfigJson;
+
     @Override
     public void prepare() {
     }
@@ -83,7 +87,7 @@ public class KafkaProducerManager implements BootService, Runnable {
 
     String formatTopicNameThenRegister(String topic) {
         String topicName = StringUtil.isBlank(Kafka.NAMESPACE) ? topic
-                : Kafka.NAMESPACE + "-" + topic;
+            : Kafka.NAMESPACE + "-" + topic;
         topics.add(topicName);
         return topicName;
     }
@@ -101,50 +105,67 @@ public class KafkaProducerManager implements BootService, Runnable {
     @Override
     public void run() {
         Thread.currentThread().setContextClassLoader(AgentClassLoader.getDefault());
+        if (this.producer == null ||
+            this.producerConfig != Kafka.PRODUCER_CONFIG ||
+            !this.producerConfigJson.equals(Kafka.PRODUCER_CONFIG_JSON) ||
+            !this.bootstrapServers.equals(Kafka.BOOTSTRAP_SERVERS)) {
 
-        Properties properties = new Properties();
-        properties.setProperty(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, Kafka.BOOTSTRAP_SERVERS);
+            this.producerConfig = Kafka.PRODUCER_CONFIG;
+            this.producerConfigJson = Kafka.PRODUCER_CONFIG_JSON;
+            this.bootstrapServers = Kafka.BOOTSTRAP_SERVERS;
 
-        if (StringUtil.isNotEmpty(Kafka.PRODUCER_CONFIG_JSON)) {
-            Gson gson = new Gson();
-            Map<String, String> config = (Map<String, String>) gson.fromJson(Kafka.PRODUCER_CONFIG_JSON, Map.class);
-            config.forEach(properties::setProperty);
-        }
-        Kafka.PRODUCER_CONFIG.forEach(properties::setProperty);
+            Properties properties = new Properties();
+            properties.setProperty(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, Kafka.BOOTSTRAP_SERVERS);
 
-        try (AdminClient adminClient = AdminClient.create(properties)) {
-            DescribeTopicsResult topicsResult = adminClient.describeTopics(topics);
-            Set<String> topics = topicsResult.values().entrySet().stream()
-                    .map(entry -> {
-                        try {
-                            entry.getValue().get(
-                                    Kafka.GET_TOPIC_TIMEOUT,
-                                    TimeUnit.SECONDS
-                            );
-                            return null;
-                        } catch (InterruptedException | ExecutionException | TimeoutException e) {
-                            LOGGER.error(e, "Get KAFKA topic:{} error.", entry.getKey());
-                        }
-                        return entry.getKey();
-                    })
-                    .filter(Objects::nonNull)
-                    .collect(Collectors.toSet());
-    
-            if (!topics.isEmpty()) {
-                LOGGER.warn("kafka topics {} is not exist, connect to kafka cluster abort", topics);
-                return;
+            if (StringUtil.isNotEmpty(Kafka.PRODUCER_CONFIG_JSON)) {
+                Gson gson = new Gson();
+                Map<String, String> config = (Map<String, String>) gson.fromJson(Kafka.PRODUCER_CONFIG_JSON, Map.class);
+                config.forEach(properties::setProperty);
             }
-    
-            try {
-                producer = new KafkaProducer<>(properties, new StringSerializer(), new BytesSerializer());
-            } catch (Exception e) {
-                LOGGER.error(e, "connect to kafka cluster '{}' failed", Kafka.BOOTSTRAP_SERVERS);
-                return;
+            Kafka.PRODUCER_CONFIG.forEach(properties::setProperty);
+
+            try (AdminClient adminClient = AdminClient.create(properties)) {
+                DescribeTopicsResult topicsResult = adminClient.describeTopics(topics);
+                Set<String> topics = topicsResult.values().entrySet().stream()
+                                                 .map(entry -> {
+                                                     try {
+                                                         entry.getValue().get(
+                                                             Kafka.GET_TOPIC_TIMEOUT,
+                                                             TimeUnit.SECONDS
+                                                         );
+                                                         return null;
+                                                     } catch (InterruptedException | ExecutionException | TimeoutException e) {
+                                                         LOGGER.error(e, "Get KAFKA topic:{} error.", entry.getKey());
+                                                     }
+                                                     return entry.getKey();
+                                                 })
+                                                 .filter(Objects::nonNull)
+                                                 .collect(Collectors.toSet());
+
+                if (!topics.isEmpty()) {
+                    LOGGER.warn("kafka topics {} is not exist, connect to kafka cluster abort", topics);
+                    return;
+                }
+
+                try {
+                    KafkaProducer<String, Bytes> newProducer = new KafkaProducer<>(
+                        properties, new StringSerializer(), new BytesSerializer());
+                    KafkaProducer<String, Bytes> oldProducer = this.producer;
+                    this.producer = newProducer;
+                    if (oldProducer != null) {
+                        oldProducer.flush();
+                        oldProducer.close();
+                    }
+
+                } catch (Exception e) {
+                    LOGGER.error(e, "connect to kafka cluster '{}' failed", Kafka.BOOTSTRAP_SERVERS);
+                    return;
+                }
+                //notify listeners to send data if no exception been throw
+                notifyListeners(KafkaConnectionStatus.CONNECTED);
             }
-            //notify listeners to send data if no exception been throw
-            notifyListeners(KafkaConnectionStatus.CONNECTED);
-            bootProducerFuture.cancel(true);
         }
+
     }
 
     private void notifyListeners(KafkaConnectionStatus status) {
@@ -155,6 +176,7 @@ public class KafkaProducerManager implements BootService, Runnable {
 
     /**
      * Get the KafkaProducer instance to send data to Kafka broker.
+     *
      * @return Kafka producer
      */
     public final KafkaProducer<String, Bytes> getProducer() {
